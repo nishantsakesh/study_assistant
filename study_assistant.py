@@ -1,4 +1,4 @@
-# study_assistant
+# study_assistant_v3.3 - Deployment Fix Version
 import streamlit as st
 import pdfplumber, io, re, json, numpy as np, pandas as pd, nltk, requests, docx
 from bs4 import BeautifulSoup
@@ -11,7 +11,7 @@ import graphviz
 # --- Page Config ---
 st.set_page_config(page_title="Ultimate AI Study Assistant", layout="wide")
 
-# --- NLTK Punkt Tokenizer ---
+# --- NLTK Punkt Tokenizer (FIXED) ---
 try:
     nltk.data.find("tokenizers/punkt")
 except LookupError:
@@ -22,14 +22,22 @@ except LookupError:
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
-@st.cache_resource(show_spinner="Loading Open Source LLM (Phi-3)... This may take a while.")
+@st.cache_resource(show_spinner="Loading Open Source LLM (TinyLlama)... This may take a while.")
 def load_llm():
+    """
+    Loads a smaller, memory-efficient LLM (TinyLlama) suitable for Streamlit Cloud deployment.
+    """
     return AutoModelForCausalLM.from_pretrained(
-        "microsoft/Phi-3-mini-4k-instruct-gguf", model_file="Phi-3-mini-4k-instruct-q4.gguf",
-        model_type="phi3", gpu_layers=0, context_length=4000
+        # Switched from Phi-3 to TinyLlama
+        "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
+        model_file="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        # Updated model type
+        model_type="llama",
+        gpu_layers=0,
+        context_length=2048
     )
 
-# --- Text Extraction & Core Logic Functions ---
+# --- Text Extraction & Core Logic Functions (Unchanged) ---
 def extract_text_from_pdf(file_bytes):
     text = ""
     try:
@@ -81,9 +89,9 @@ def split_text_into_sentences(text):
 def embed_texts(_model, texts):
     return _model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
-# --- Feature Generation Functions ---
+# --- Feature Generation Functions (Prompts updated for TinyLlama) ---
 def generate_abstractive_summary(llm, text):
-    prompt = f"<|user|>\nSummarize the text concisely in bullet points.\n\nText:\n---\n{text[:3500]}\n---\nSummary:<|end|>\n<|assistant|>"
+    prompt = f"<|im_start|>user\nSummarize the text concisely in bullet points.\n\nText:\n---\n{text[:1800]}\n---\nSummary:<|im_end|>\n<|im_start|>assistant\n"
     return llm(prompt)
 
 def answer_question(llm, question, sentences, sentence_embeddings, embedding_model):
@@ -91,10 +99,7 @@ def answer_question(llm, question, sentences, sentence_embeddings, embedding_mod
     similarities = cosine_similarity(question_embedding, sentence_embeddings)[0]
     top_indices = np.argsort(similarities)[-5:][::-1]
     context = "\n".join([sentences[i] for i in top_indices])
-    prompt = f"""<|user|>
-    Based ONLY on the context below, answer the question. If the answer isn't in the context, say so.
-    Context: --- {context} --- Question: {question}<|end|>
-    <|assistant|>"""
+    prompt = f"<|im_start|>user\nBased ONLY on the context below, answer the question. If the answer isn't in the context, say so.\nContext: --- {context} --- \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\n"
     return llm(prompt)
 
 def generate_flashcards(sentences, num_cards=5):
@@ -112,11 +117,7 @@ def generate_flashcards(sentences, num_cards=5):
     return flashcards
 
 def generate_smart_mcqs(llm, text, num_mcqs=3):
-    prompt = f"""<|user|>
-    Generate {num_mcqs} multiple-choice questions from the text. Provide three plausible but incorrect distractors.
-    Format as a valid JSON list of objects with keys: "question", "options", "answer".
-    Text: --- {text[:3500]} --- JSON Output:<|end|>
-    <|assistant|>"""
+    prompt = f"<|im_start|>user\nGenerate {num_mcqs} multiple-choice questions from the text. Provide three plausible but incorrect distractors. Format as a valid JSON list of objects with keys: \"question\", \"options\", \"answer\".\nText: --- {text[:1800]} ---\nJSON Output:<|im_end|>\n<|im_start|>assistant\n"
     response = llm(prompt)
     try:
         json_match = re.search(r'\[.*\]', response, re.DOTALL)
@@ -136,11 +137,7 @@ def generate_anki_deck(flashcards, mcqs):
     return df.to_csv(index=False, header=False).encode('utf-8')
 
 def generate_knowledge_graph(llm, text):
-    prompt = f"""<|user|>
-    Extract the main concepts and their relationships from the text as a list of triplets.
-    Format the output as a valid JSON list of lists. Example: [["AI", "is a branch of", "Computer Science"]]
-    Text: --- {text[:3000]} --- JSON Output:<|end|>
-    <|assistant|>"""
+    prompt = f"<|im_start|>user\nExtract the main concepts and their relationships from the text as a list of triplets. Format the output as a valid JSON list of lists. Example: [[\"AI\", \"is a branch of\", \"Computer Science\"]]\nText: --- {text[:1500]} ---\nJSON Output:<|im_end|>\n<|im_start|>assistant\n"
     response = llm(prompt)
     try:
         json_match = re.search(r'\[\s*\[.*\]\s*\]', response, re.DOTALL)
@@ -160,15 +157,12 @@ def generate_knowledge_graph(llm, text):
 st.title("🧠 Ultimate AI Study Assistant")
 st.caption("From PDF, URL, or YouTube to Summaries, Quizzes, Mind Maps & Anki cards!")
 
-# Load models once
 embedding_model = load_embedding_model()
 llm = load_llm()
 
-# Initialize session state for text and quiz answers
 if 'raw_text' not in st.session_state: st.session_state.raw_text = ""
 if 'user_answers' not in st.session_state: st.session_state.user_answers = {}
 
-# --- Input UI in an Expander ---
 with st.expander("📚 Step 1: Provide Your Content", expanded=True):
     input_method = st.radio("Choose input method:", ["File Upload", "Web URL", "YouTube URL"], horizontal=True, label_visibility="collapsed")
     
@@ -194,12 +188,11 @@ with st.expander("📚 Step 1: Provide Your Content", expanded=True):
         else:
             st.warning("Please provide some content to analyze.")
 
-# --- Main App Logic (displays only after analysis) ---
 if st.session_state.raw_text:
     sentences = split_text_into_sentences(st.session_state.raw_text)
     
     if not sentences:
-        st.warning("Could not extract enough text from the content. Please try a different source.")
+        st.warning("Could not extract enough text. Please try a different source.")
     else:
         st.header("🚀 Your Study Kit")
         sentence_embeddings = embed_texts(embedding_model, sentences)
@@ -229,10 +222,10 @@ if st.session_state.raw_text:
                     answer = st.radio("Options:", mcq['options'], key=f"mcq_{i}", index=None)
                     st.session_state.user_answers[i] = {"selected": answer, "correct": mcq['answer']}
 
-                if st.button("Check Answers"):
+                if mcqs and st.button("Check Answers"):
                     score = 0; total = len(mcqs)
                     for i, result in st.session_state.user_answers.items():
-                        if result['selected'] == result['correct']: score += 1
+                        if result.get('selected') == result.get('correct'): score += 1
                     st.metric("Your Score:", f"{score}/{total}")
 
         with tab3:
@@ -250,5 +243,4 @@ if st.session_state.raw_text:
             if user_question:
                 with st.spinner("Searching for the answer..."):
                     answer = answer_question(llm, user_question, sentences, sentence_embeddings, embedding_model)
-
                     st.info(answer)
