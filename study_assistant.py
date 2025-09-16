@@ -14,7 +14,7 @@ st.set_page_config(page_title="Ultimate AI Study Assistant", layout="wide")
 # --- NLTK Punkt Tokenizer ---
 try:
     nltk.data.find("tokenizers/punkt")
-except nltk.downloader.DownloadError:
+except LookupError:
     nltk.download("punkt", quiet=True)
 
 # --- Model Loading (Cached) ---
@@ -250,4 +250,5 @@ if st.session_state.raw_text:
             if user_question:
                 with st.spinner("Searching for the answer..."):
                     answer = answer_question(llm, user_question, sentences, sentence_embeddings, embedding_model)
+
                     st.info(answer)
