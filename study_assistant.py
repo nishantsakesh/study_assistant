@@ -1,4 +1,4 @@
-# study_assistant_v3.3 - Deployment Fix Version
+# study_assistant_v3.4 - Final Deployment Version with NLTK Fix
 import streamlit as st
 import pdfplumber, io, re, json, numpy as np, pandas as pd, nltk, requests, docx
 from bs4 import BeautifulSoup
@@ -11,11 +11,18 @@ import graphviz
 # --- Page Config ---
 st.set_page_config(page_title="Ultimate AI Study Assistant", layout="wide")
 
-# --- NLTK Punkt Tokenizer (FIXED) ---
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt", quiet=True)
+# --- NLTK Data Downloader (ROBUST FIX) ---
+@st.cache_resource
+def ensure_nltk_data():
+    """Downloads NLTK 'punkt' tokenizer if not already present."""
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        st.info("One-time download: NLTK's 'punkt' tokenizer for sentence splitting.")
+        nltk.download('punkt', quiet=True)
+
+# Ensure data is ready at the start
+ensure_nltk_data()
 
 # --- Model Loading (Cached) ---
 @st.cache_resource(show_spinner="Loading embedding model...")
@@ -24,17 +31,9 @@ def load_embedding_model():
 
 @st.cache_resource(show_spinner="Loading Open Source LLM (TinyLlama)... This may take a while.")
 def load_llm():
-    """
-    Loads a smaller, memory-efficient LLM (TinyLlama) suitable for Streamlit Cloud deployment.
-    """
     return AutoModelForCausalLM.from_pretrained(
-        # Switched from Phi-3 to TinyLlama
-        "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
-        model_file="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-        # Updated model type
-        model_type="llama",
-        gpu_layers=0,
-        context_length=2048
+        "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", model_file="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        model_type="llama", gpu_layers=0, context_length=2048
     )
 
 # --- Text Extraction & Core Logic Functions (Unchanged) ---
@@ -89,7 +88,7 @@ def split_text_into_sentences(text):
 def embed_texts(_model, texts):
     return _model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
-# --- Feature Generation Functions (Prompts updated for TinyLlama) ---
+# --- Feature Generation Functions ---
 def generate_abstractive_summary(llm, text):
     prompt = f"<|im_start|>user\nSummarize the text concisely in bullet points.\n\nText:\n---\n{text[:1800]}\n---\nSummary:<|im_end|>\n<|im_start|>assistant\n"
     return llm(prompt)
@@ -198,49 +197,4 @@ if st.session_state.raw_text:
         sentence_embeddings = embed_texts(embedding_model, sentences)
         
         tab_titles = ["📖 Summaries", "🗂️ Flashcards & Quiz", "🧠 Mind Map", "💬 Chat with Document"]
-        tab1, tab2, tab3, tab4 = st.tabs(tab_titles)
-
-        with tab1:
-            with st.spinner("Generating AI summary..."):
-                st.subheader("🤖 AI-Generated Abstractive Summary")
-                st.info(generate_abstractive_summary(llm, st.session_state.raw_text))
-        
-        with tab2:
-            st.subheader("Fill-in-the-Blank Flashcards & MCQs")
-            flashcards = generate_flashcards(sentences)
-            with st.spinner("Generating smart MCQs..."):
-                mcqs = generate_smart_mcqs(llm, st.session_state.raw_text, num_mcqs=3)
-
-            if not flashcards and not mcqs:
-                st.warning("Could not generate flashcards or MCQs for this text.")
-            else:
-                anki_csv = generate_anki_deck(flashcards, mcqs)
-                st.download_button("Export to Anki (CSV)", anki_csv, "anki_deck.csv", "text/csv")
-                
-                for i, mcq in enumerate(mcqs):
-                    st.markdown(f"**Question {i+1}:** {mcq['question']}")
-                    answer = st.radio("Options:", mcq['options'], key=f"mcq_{i}", index=None)
-                    st.session_state.user_answers[i] = {"selected": answer, "correct": mcq['answer']}
-
-                if mcqs and st.button("Check Answers"):
-                    score = 0; total = len(mcqs)
-                    for i, result in st.session_state.user_answers.items():
-                        if result.get('selected') == result.get('correct'): score += 1
-                    st.metric("Your Score:", f"{score}/{total}")
-
-        with tab3:
-            st.subheader("Concept Mind Map")
-            with st.spinner("Generating knowledge graph..."):
-                graph = generate_knowledge_graph(llm, st.session_state.raw_text)
-            if graph:
-                st.graphviz_chart(graph)
-            else:
-                st.warning("Could not generate a mind map for this text.")
-
-        with tab4:
-            st.subheader("Ask a Question")
-            user_question = st.text_input("Ask anything about your document:", key="qna_input")
-            if user_question:
-                with st.spinner("Searching for the answer..."):
-                    answer = answer_question(llm, user_question, sentences, sentence_embeddings, embedding_model)
-                    st.info(answer)
+        tab1, tab2, tab3, tab4 = st.tabs(
