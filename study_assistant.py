@@ -1,4 +1,4 @@
-# study_assistant_v3.4 - Final Deployment Version with NLTK Fix
+# study_assistant_v3.5 - Final Syntax Fix
 import streamlit as st
 import pdfplumber, io, re, json, numpy as np, pandas as pd, nltk, requests, docx
 from bs4 import BeautifulSoup
@@ -11,7 +11,7 @@ import graphviz
 # --- Page Config ---
 st.set_page_config(page_title="Ultimate AI Study Assistant", layout="wide")
 
-# --- NLTK Data Downloader (ROBUST FIX) ---
+# --- NLTK Data Downloader ---
 @st.cache_resource
 def ensure_nltk_data():
     """Downloads NLTK 'punkt' tokenizer if not already present."""
@@ -21,7 +21,6 @@ def ensure_nltk_data():
         st.info("One-time download: NLTK's 'punkt' tokenizer for sentence splitting.")
         nltk.download('punkt', quiet=True)
 
-# Ensure data is ready at the start
 ensure_nltk_data()
 
 # --- Model Loading (Cached) ---
@@ -36,7 +35,7 @@ def load_llm():
         model_type="llama", gpu_layers=0, context_length=2048
     )
 
-# --- Text Extraction & Core Logic Functions (Unchanged) ---
+# --- Text Extraction & Core Logic Functions ---
 def extract_text_from_pdf(file_bytes):
     text = ""
     try:
@@ -197,4 +196,50 @@ if st.session_state.raw_text:
         sentence_embeddings = embed_texts(embedding_model, sentences)
         
         tab_titles = ["📖 Summaries", "🗂️ Flashcards & Quiz", "🧠 Mind Map", "💬 Chat with Document"]
-        tab1, tab2, tab3, tab4 = st.tabs(
+        # SYNTAX FIX IS HERE: The closing parenthesis was missing in the user's version.
+        tab1, tab2, tab3, tab4 = st.tabs(tab_titles)
+
+        with tab1:
+            with st.spinner("Generating AI summary..."):
+                st.subheader("🤖 AI-Generated Abstractive Summary")
+                st.info(generate_abstractive_summary(llm, st.session_state.raw_text))
+        
+        with tab2:
+            st.subheader("Fill-in-the-Blank Flashcards & MCQs")
+            flashcards = generate_flashcards(sentences)
+            with st.spinner("Generating smart MCQs..."):
+                mcqs = generate_smart_mcqs(llm, st.session_state.raw_text, num_mcqs=3)
+
+            if not flashcards and not mcqs:
+                st.warning("Could not generate flashcards or MCQs for this text.")
+            else:
+                anki_csv = generate_anki_deck(flashcards, mcqs)
+                st.download_button("Export to Anki (CSV)", anki_csv, "anki_deck.csv", "text/csv")
+                
+                for i, mcq in enumerate(mcqs):
+                    st.markdown(f"**Question {i+1}:** {mcq['question']}")
+                    answer = st.radio("Options:", mcq['options'], key=f"mcq_{i}", index=None)
+                    st.session_state.user_answers[i] = {"selected": answer, "correct": mcq['answer']}
+
+                if mcqs and st.button("Check Answers"):
+                    score = 0; total = len(mcqs)
+                    for i, result in st.session_state.user_answers.items():
+                        if result.get('selected') == result.get('correct'): score += 1
+                    st.metric("Your Score:", f"{score}/{total}")
+
+        with tab3:
+            st.subheader("Concept Mind Map")
+            with st.spinner("Generating knowledge graph..."):
+                graph = generate_knowledge_graph(llm, st.session_state.raw_text)
+            if graph:
+                st.graphviz_chart(graph)
+            else:
+                st.warning("Could not generate a mind map for this text.")
+
+        with tab4:
+            st.subheader("Ask a Question")
+            user_question = st.text_input("Ask anything about your document:", key="qna_input")
+            if user_question:
+                with st.spinner("Searching for the answer..."):
+                    answer = answer_question(llm, user_question, sentences, sentence_embeddings, embedding_model)
+                    st.info(answer)
