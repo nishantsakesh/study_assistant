@@ -1,4 +1,4 @@
-# study_assistant_perfected.py
+# study_assistant_deployment_ready.py
 import streamlit as st
 import pdfplumber, io, re, numpy as np, nltk
 from sentence_transformers import SentenceTransformer
@@ -21,22 +21,14 @@ def load_models():
     """Loads both the embedding model and the LLM."""
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     
-    # --- MODEL CHOICE ---
-    # Phi-3-mini is more powerful but requires more memory (~4-5 GB RAM).
-    # It might fail on Streamlit's free tier.
+    # --- MODEL FIXED FOR DEPLOYMENT ---
+    # Switched back to TinyLlama as it fits in Streamlit Cloud's memory.
     llm = AutoModelForCausalLM.from_pretrained(
-        "microsoft/Phi-3-mini-4k-instruct-gguf",
-        model_file="Phi-3-mini-4k-instruct-q4.gguf",
-        model_type="phi3",
+        "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", model_file="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        model_type="llama", # Model type is now 'llama'
         gpu_layers=0,
-        context_length=4000
+        context_length=2048
     )
-    
-    # # UNCOMMENT THE CODE BELOW (and comment the one above) TO USE TINYLLAMA FOR EASY DEPLOYMENT
-    # llm = AutoModelForCausalLM.from_pretrained(
-    #     "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", model_file="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-    #     model_type="llama", gpu_layers=0, context_length=2048
-    # )
 
     return embedding_model, llm
 
@@ -51,7 +43,7 @@ def extract_text_from_file(file_bytes, file_type):
                     try:
                         page_text = page.extract_text(x_tolerance=2)
                         if page_text: text += page_text + "\n"
-                    except: continue # Skip pages with font/parsing errors
+                    except: continue
         except Exception as e:
             st.error(f"PDF parsing error: {e}")
     elif file_type == "text/plain":
@@ -60,10 +52,8 @@ def extract_text_from_file(file_bytes, file_type):
 
 def clean_and_split_text(text):
     """Cleans up the extracted text and splits it into sentences."""
-    # A simple cleanup
     text = re.sub(r'\n\s*\n', '\n\n', text)
     text = re.sub(r' +', ' ', text)
-    # Split into sentences
     sentences = nltk.tokenize.sent_tokenize(text)
     return [s.strip() for s in sentences if len(s.strip()) > 20]
 
@@ -72,10 +62,11 @@ def embed_texts(_model, texts):
     """Generates embeddings for a list of texts."""
     return _model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
-# --- Feature Generation Functions ---
+# --- Feature Generation Functions (Prompts fixed for TinyLlama) ---
 def generate_summary(llm, text):
     """Generates a concise, AI-powered summary."""
-    prompt = f"<|user|>\nSummarize the following text in a few clear and concise bullet points. Capture only the most important ideas.\n\nText:\n---\n{text[:3500]}\n---\nSummary:<|end|>\n<|assistant|>"
+    # --- PROMPT UPDATED FOR TINYLLAMA ---
+    prompt = f"<|im_start|>user\nSummarize the following text in a few concise bullet points.\n\nText:\n---\n{text[:1800]}\n---\nSummary:<|im_end|>\n<|im_start|>assistant\n"
     try:
         return llm(prompt, max_new_tokens=512, temperature=0.5)
     except Exception as e:
@@ -85,11 +76,11 @@ def answer_question(llm, question, sentences, sentence_embeddings, embedding_mod
     """Answers a user's question about the text using RAG."""
     question_embedding = embed_texts(embedding_model, [question])[0].reshape(1, -1)
     similarities = cosine_similarity(question_embedding, sentence_embeddings)[0]
-    # Retrieve top 5 most relevant sentences as context
     top_indices = np.argsort(similarities)[-5:][::-1]
     context = "\n".join([sentences[i] for i in top_indices])
     
-    prompt = f"<|user|>\nBased ONLY on the context provided below, answer the user's question. If the answer is not in the context, state that clearly.\n\nContext:\n--- {context} ---\n\nQuestion: {question}<|end|>\n<|assistant|>"
+    # --- PROMPT UPDATED FOR TINYLLAMA ---
+    prompt = f"<|im_start|>user\nBased ONLY on the context provided below, answer the user's question. If the answer is not in the context, state that clearly.\n\nContext:\n--- {context} ---\n\nQuestion: {question}<|im_end|>\n<|im_start|>assistant\n"
     try:
         return llm(prompt, max_new_tokens=512, temperature=0.5)
     except Exception as e:
@@ -111,16 +102,13 @@ if uploaded_file:
     if not sentences:
         st.warning("Could not extract enough readable text from this document. Please try another file.")
     else:
-        # Generate and cache embeddings once
         sentence_embeddings = embed_texts(embedding_model, sentences)
         
-        # --- 1. AI Summary ---
         st.header("🤖 AI-Generated Summary", divider='rainbow')
         with st.spinner("Generating summary..."):
             summary = generate_summary(llm, raw_text)
             st.markdown(summary)
 
-        # --- 2. Chat with Document ---
         st.header("💬 Chat with Your Document", divider='rainbow')
         user_question = st.text_input("Ask a question about the content:")
 
