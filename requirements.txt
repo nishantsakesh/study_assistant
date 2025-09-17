@@ -3,11 +3,5 @@ pdfplumber
 nltk
 sentence-transformers
 scikit-learn
-pandas
 numpy
 ctransformers
-python-docx
-beautifulsoup4
-requests
-youtube-transcript-api
-graphviz
