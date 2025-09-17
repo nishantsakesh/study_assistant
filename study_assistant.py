@@ -1,4 +1,4 @@
-# study_assistant_v3.5 - Final Syntax Fix
+# study_assistant_v4.0_phi3.py
 import streamlit as st
 import pdfplumber, io, re, json, numpy as np, pandas as pd, nltk, requests, docx
 from bs4 import BeautifulSoup
@@ -8,31 +8,28 @@ from sklearn.metrics.pairwise import cosine_similarity
 from ctransformers import AutoModelForCausalLM
 import graphviz
 
-# --- Page Config ---
+# --- Page Config & NLTK Setup ---
 st.set_page_config(page_title="Ultimate AI Study Assistant", layout="wide")
-
-# --- NLTK Data Downloader ---
-@st.cache_resource
-def ensure_nltk_data():
-    """Downloads NLTK 'punkt' tokenizer if not already present."""
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        st.info("One-time download: NLTK's 'punkt' tokenizer for sentence splitting.")
-        nltk.download('punkt', quiet=True)
-
-ensure_nltk_data()
+try:
+    nltk.data.path.append('./nltk_data')
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
 
 # --- Model Loading (Cached) ---
 @st.cache_resource(show_spinner="Loading embedding model...")
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
-@st.cache_resource(show_spinner="Loading Open Source LLM (TinyLlama)... This may take a while.")
+@st.cache_resource(show_spinner="Loading Open Source LLM (Phi-3)... This may take a while.")
 def load_llm():
+    # UPDATED to use the powerful Phi-3-mini model
     return AutoModelForCausalLM.from_pretrained(
-        "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", model_file="tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-        model_type="llama", gpu_layers=0, context_length=2048
+        "microsoft/Phi-3-mini-4k-instruct-gguf",
+        model_file="Phi-3-mini-4k-instruct-q4.gguf",
+        model_type="phi3",
+        gpu_layers=0,
+        context_length=4000
     )
 
 # --- Text Extraction & Core Logic Functions ---
@@ -41,7 +38,10 @@ def extract_text_from_pdf(file_bytes):
     try:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             for page in pdf.pages:
-                text += page.extract_text() or ""
+                try:
+                    page_text = page.extract_text(x_tolerance=2)
+                    if page_text: text += page_text + "\n"
+                except: continue
     except Exception as e:
         st.error(f"PDF parsing error: {e}")
     return text
@@ -87,9 +87,9 @@ def split_text_into_sentences(text):
 def embed_texts(_model, texts):
     return _model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
-# --- Feature Generation Functions ---
+# --- Feature Generation Functions (Prompts updated for Phi-3) ---
 def generate_abstractive_summary(llm, text):
-    prompt = f"<|im_start|>user\nSummarize the text concisely in bullet points.\n\nText:\n---\n{text[:1800]}\n---\nSummary:<|im_end|>\n<|im_start|>assistant\n"
+    prompt = f"<|user|>\nSummarize the text concisely in bullet points.\n\nText:\n---\n{text[:3500]}\n---\nSummary:<|end|>\n<|assistant|>"
     return llm(prompt)
 
 def answer_question(llm, question, sentences, sentence_embeddings, embedding_model):
@@ -97,7 +97,7 @@ def answer_question(llm, question, sentences, sentence_embeddings, embedding_mod
     similarities = cosine_similarity(question_embedding, sentence_embeddings)[0]
     top_indices = np.argsort(similarities)[-5:][::-1]
     context = "\n".join([sentences[i] for i in top_indices])
-    prompt = f"<|im_start|>user\nBased ONLY on the context below, answer the question. If the answer isn't in the context, say so.\nContext: --- {context} --- \nQuestion: {question}<|im_end|>\n<|im_start|>assistant\n"
+    prompt = f"<|user|>\nBased ONLY on the context below, answer the question. If the answer isn't in the context, state that.\nContext: --- {context} --- \nQuestion: {question}<|end|>\n<|assistant|>"
     return llm(prompt)
 
 def generate_flashcards(sentences, num_cards=5):
@@ -115,7 +115,7 @@ def generate_flashcards(sentences, num_cards=5):
     return flashcards
 
 def generate_smart_mcqs(llm, text, num_mcqs=3):
-    prompt = f"<|im_start|>user\nGenerate {num_mcqs} multiple-choice questions from the text. Provide three plausible but incorrect distractors. Format as a valid JSON list of objects with keys: \"question\", \"options\", \"answer\".\nText: --- {text[:1800]} ---\nJSON Output:<|im_end|>\n<|im_start|>assistant\n"
+    prompt = f"<|user|>\nGenerate {num_mcqs} multiple-choice questions from the text. Provide three plausible but incorrect distractors. Format as a valid JSON list of objects with keys: \"question\", \"options\", \"answer\".\nText: --- {text[:3500]} ---\nJSON Output:<|end|>\n<|assistant|>"
     response = llm(prompt)
     try:
         json_match = re.search(r'\[.*\]', response, re.DOTALL)
@@ -135,7 +135,7 @@ def generate_anki_deck(flashcards, mcqs):
     return df.to_csv(index=False, header=False).encode('utf-8')
 
 def generate_knowledge_graph(llm, text):
-    prompt = f"<|im_start|>user\nExtract the main concepts and their relationships from the text as a list of triplets. Format the output as a valid JSON list of lists. Example: [[\"AI\", \"is a branch of\", \"Computer Science\"]]\nText: --- {text[:1500]} ---\nJSON Output:<|im_end|>\n<|im_start|>assistant\n"
+    prompt = f"<|user|>\nExtract the main concepts and their relationships from the text as a list of triplets. Format the output as a valid JSON list of lists. Example: [[\"AI\", \"is a branch of\", \"Computer Science\"]]\nText: --- {text[:3000]} ---\nJSON Output:<|end|>\n<|assistant|>"
     response = llm(prompt)
     try:
         json_match = re.search(r'\[\s*\[.*\]\s*\]', response, re.DOTALL)
@@ -190,13 +190,12 @@ if st.session_state.raw_text:
     sentences = split_text_into_sentences(st.session_state.raw_text)
     
     if not sentences:
-        st.warning("Could not extract enough text. Please try a different source.")
+        st.warning("Could not extract enough text from the content. Please try a different source.")
     else:
         st.header("🚀 Your Study Kit")
         sentence_embeddings = embed_texts(embedding_model, sentences)
         
         tab_titles = ["📖 Summaries", "🗂️ Flashcards & Quiz", "🧠 Mind Map", "💬 Chat with Document"]
-        # SYNTAX FIX IS HERE: The closing parenthesis was missing in the user's version.
         tab1, tab2, tab3, tab4 = st.tabs(tab_titles)
 
         with tab1:
